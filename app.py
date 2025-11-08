@@ -1,20 +1,29 @@
-
 """
 Teleoperation Panel (Tkinter) — 7-DOF control for SerialRobotSim + CSV + image-control (ORB) + thread-safe UI.
 
 Run:
-    pip install opencv-python matplotlib numpy
+    pip install opencv-python matplotlib numpy pillow
     python app.py
 """
 
 import tkinter as tk
-from PIL import Image, ImageTk # You might need to install Pillow: pip install Pillow
 from tkinter import ttk, filedialog, messagebox
+from PIL import Image, ImageTk  # pip install pillow
 import threading
 import time
 import csv
 import os
+import sys
 from datetime import datetime
+
+# ---------- Packaging-safe asset resolver ----------
+def resource_path(rel_path: str) -> str:
+    """
+    Return absolute path to resource, works for dev and for PyInstaller bundle.
+    """
+    if hasattr(sys, "_MEIPASS"):  # set by PyInstaller in onefile mode
+        return os.path.join(sys._MEIPASS, rel_path)
+    return os.path.join(os.path.abspath("."), rel_path)
 
 # Import adapter that wraps SerialRobotSim
 from sim_adapter import SimulationEnvironment  # uses SerialRobotSim internally
@@ -30,9 +39,6 @@ def show_splash(root, logo_path=None, duration_ms=1500):
     Show a small centered splash for duration_ms, then reveal the main window.
     Safe: no threads started; does not touch your existing logic.
     """
-    import tkinter as tk
-    from tkinter import ttk
-
     # Start hidden; we reveal after splash
     root.withdraw()
 
@@ -47,14 +53,12 @@ def show_splash(root, logo_path=None, duration_ms=1500):
     used_image = False
     if logo_path:
         try:
-            from PIL import Image, ImageTk  # pip install pillow (optional)
             img = Image.open(logo_path)
-            # scale down if huge
             max_w, max_h = 360, 360
             w, h = img.size
             scale = min(max_w / w, max_h / h, 1.0)
             if scale < 1.0:
-                img = img.resize((int(w*scale), int(h*scale)), Image.LANCZOS)
+                img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
             tkimg = ImageTk.PhotoImage(img)
             lbl = tk.Label(frame, image=tkimg, bg="#0f1116")
             lbl.image = tkimg  # keep ref
@@ -103,14 +107,16 @@ class TeleopApp:
         self.root = root
         root.title(APP_NAME)
         root.geometry("980x640")
-        
-        
-        image = Image.open("T-logo.png") # Replace 'my_icon.png' with your image file
-        photo = ImageTk.PhotoImage(image)
 
-        # Set the window icon using the PhotoImage object
-        # The first argument (True/False) determines if child windows also inherit the icon
-        root.iconphoto(True, photo) 
+        # Safe window icon (optional). If missing, silently continue.
+        try:
+            icon_path = resource_path("assets/T-logo.png")  # <— place file here or change name
+            if os.path.exists(icon_path):
+                _icon_img = Image.open(icon_path)
+                _icon_photo = ImageTk.PhotoImage(_icon_img)
+                root.iconphoto(True, _icon_photo)
+        except Exception:
+            pass
 
         self.sim = SimulationEnvironment()
         self.dof = self.sim.dof
@@ -120,7 +126,6 @@ class TeleopApp:
         self.pose_lock = threading.Lock()
         self.pose_cmd = [0.0, 0.0, 250.0, 0.0, 0.0, 0.0]  # default slider pose
         self.defaults = {"X": 0.0, "Y": 0.0, "Z": 250.0, "Roll": 0.0, "Pitch": 0.0, "Yaw": 0.0}
-
 
         # after() callback ids (for safe cancel)
         self._redraw_after_id = None
@@ -169,7 +174,7 @@ class TeleopApp:
         # Keep reference so we can update the label programmatically
         s._valvar = v
 
-        def on_move(evt):
+        def on_move(evt=None):
             v.set(f"{s.get():.1f}")
 
         s.bind("<B1-Motion>", on_move)
@@ -181,14 +186,12 @@ class TeleopApp:
         # 1) Update the shared pose buffer first (thread-safe)
         with self.pose_lock:
             self.pose_cmd = [self.defaults[k] for k in self.keys]
-
-        # 2) Reflect on sliders (we're on the Tk main thread here)
+        # 2) Reflect on sliders (Tk main thread)
         for k, v in self.defaults.items():
             s = self.scales[k]
             s.set(v)
             if hasattr(s, "_valvar"):
                 s._valvar.set(f"{v:.1f}")
-
 
     def _build_control_tab(self):
         f = self.frame_control
@@ -207,7 +210,6 @@ class TeleopApp:
 
         ttk.Separator(left, orient="horizontal").pack(fill="x", padx=6, pady=(6, 2))
         ttk.Button(left, text="Reset Sliders", command=self.reset_sliders).pack(fill="x", padx=6, pady=6)
-
 
         # ---- right: session info ----
         right = ttk.LabelFrame(f, text="Session")
@@ -268,15 +270,17 @@ class TeleopApp:
         f = self.frame_help
         info = (
             "Teleoperation Panel — Quick Help\n\n"
+            "• Open 3D view: Opens the visual arm simulation\n"
             "• Move sliders (XYZ mm, RPY deg) to set an EE target.\n"
             "• Start: begin streaming to 7-DOF SerialRobotSim; Stop to halt.\n"
             "• Start Recording to capture telemetry; Save CSV to export.\n"
             "• Load CSV on Replay tab then Replay CSV to drive the sim by file.\n"
             "• Image Control: pick a target image; arm nudges X/Y toward it.\n\n"
+            "\n"
             "Threading Model:\n"
-            "• Worker thread: physics only (no Tk calls).\n"
-            "• Camera thread: computes deltas; GUI updated via root.after().\n"
-            "• Main thread: Tk widgets, Matplotlib redraw, slider polling.\n"
+            "• Worker thread: Runs the physics and updates the arm pose.\n"
+            "• Camera thread: Tracks an image and sends movement commands.\n"
+            "• Main thread: Handles sliders, buttons, live telemetry. Also draws the 3D arm.\n"
         )
         ttk.Label(f, text=info, justify="left").pack(anchor="w", padx=8, pady=8)
 
@@ -294,7 +298,6 @@ class TeleopApp:
             self.pose_cmd = new_pose
 
         def _ui():
-            # reflect on sliders (will also be polled back into pose_cmd)
             self.scales["X"].set(new_pose[0])
             self.scales["Y"].set(new_pose[1])
             if hasattr(self.scales["X"], "_valvar"):
@@ -637,7 +640,6 @@ class TeleopApp:
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
 
                 cv2.imshow("Image Control (press q to close)", frame)
-                # Close on 'q' or when stop() sets the event
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
         finally:
@@ -649,22 +651,19 @@ class TeleopApp:
                 cv2.destroyAllWindows()
             except Exception:
                 pass
-            # Re-enable the button on main thread
             self.root.after(0, lambda: self.btn_image.config(state="normal"))
 
     def _stop_camera_thread(self):
         """Signal the camera thread to exit and wait briefly."""
         if self._cam_thread and self._cam_thread.is_alive():
             self._cam_stop.set()
-            # give the thread a moment to exit; don't hard join forever
             self._cam_thread.join(timeout=1.0)
         self._cam_thread = None
         self._cam_stop.clear()
 
-    # ---------------- Main / Close ----------------
+
 def main():
     root = tk.Tk()
-    app = TeleopApp(root)
 
     # nice HiDPI scaling (best effort)
     try:
@@ -672,9 +671,13 @@ def main():
     except Exception:
         pass
 
-    # >>> SHOW SPLASH for ~1.5s; pass your logo path if you have it
-    # e.g., r"C:/path/to/Trackathon_logo.png"
-    show_splash(root, logo_path="FullTrackathonLogo.png", duration_ms=1500)
+    # SHOW SPLASH (~1.5s). Pass bundled logo if present; otherwise fallback text.
+    splash_logo = resource_path("assets/FullTrackathonLogo.png")
+    if not os.path.exists(splash_logo):
+        splash_logo = None
+    show_splash(root, logo_path=splash_logo, duration_ms=1500)
+
+    app = TeleopApp(root)
 
     # Clean close: stop threads & cancel after() before destroying Tk
     def _on_close():
@@ -689,4 +692,16 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Crash logger so a frozen EXE shows you the reason if anything fails
+    try:
+        main()
+    except Exception:
+        import traceback
+        log = traceback.format_exc()
+        try:
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+            with open(os.path.join(desktop, "Trackathon_error.log"), "w", encoding="utf-8") as f:
+                f.write(log)
+        except Exception:
+            pass
+        raise
