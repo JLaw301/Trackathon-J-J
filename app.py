@@ -109,6 +109,10 @@ class TeleopApp:
         self.btn_open3d = ttk.Button(btn_row, text="Open 3D View", command=self.sim.init_figure)
         self.btn_open3d.pack(side="left", padx=10)
 
+        self.btn_clear_path = ttk.Button(btn_row, text="Clear Path", command=self.sim.clear_trajectory)
+        self.btn_clear_path.pack(side="left", padx=10)
+
+
         telem = ttk.LabelFrame(right, text="Telemetry (live)")
         telem.pack(fill="both", expand=True, padx=6, pady=6)
 

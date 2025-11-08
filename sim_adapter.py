@@ -61,6 +61,7 @@ class SimulationEnvironment:
                 self.sim.fig.canvas.flush_events()
             except Exception:
                 pass
+    
 
     # ---- control API used by GUI ----
     def set_target_ee_pose(self, pose6: List[float]):
@@ -90,3 +91,28 @@ class SimulationEnvironment:
             "joint_torques": [0.0] * self.dof,
             "ee_pose": [float(x), float(y), float(z), float(roll), float(pitch), float(yaw)],
         }
+    
+    def clear_trajectory(self):
+        """Clear the red EE path and refresh the figure."""
+        try:
+            # wipe stored trajectory
+            if hasattr(self.sim, "ee_traj"):
+                self.sim.ee_traj = []
+            # clear the plotted line if present
+            line = getattr(self.sim, "trajectory_line", None)
+            if line is not None:
+                line.set_data([], [])
+                try:
+                    # 3D needs this as well
+                    line.set_3d_properties([])
+                except Exception:
+                    pass
+            # refresh the figure if it's open
+            if getattr(self, "_fig_inited", False) and getattr(self.sim, "fig", None):
+                try:
+                    self.sim.fig.canvas.draw_idle()
+                    self.sim.fig.canvas.flush_events()
+                except Exception:
+                    pass
+        except Exception:
+            pass
